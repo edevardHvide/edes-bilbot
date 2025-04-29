@@ -9,6 +9,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import time
 from matplotlib.ticker import FuncFormatter
+from ai_analyzer import render_ai_analysis_tab
 
 # Load environment variables
 load_dotenv()
@@ -51,17 +52,17 @@ LOADING_MESSAGES = [
 ]
 
 st.set_page_config(
-    page_title="Edes bilskrapebot",
+    page_title="Ede's bilskrapebot",
     page_icon="🚗",
     layout="wide"
 )
 
 # Main heading
-st.title("Welcome to Edes bilskrapebot")
+st.title("Welcome to Ede's bilskrapebot")
 
 # Sidebar for inputs
 with st.sidebar:
-    st.header("Scraper Configuration")
+    st.header("Configuration")
     
     # Base URL input
     base_url = st.text_input(
@@ -88,9 +89,18 @@ with st.sidebar:
     ]
     
     selected_attributes = []
+    
+    # Create checkboxes for common attributes
+    # Special handling for "1. gang registrert" to display correctly
     for attr in common_attributes:
-        if st.checkbox(attr, value=True):
-            selected_attributes.append(attr)
+        # For "1. gang registrert", we need to handle it specially
+        if attr == "1. gang registrert":
+            display_name = "1\\. gang registrert"  # Escape the period for display
+            if st.checkbox(display_name, value=True, key="first_reg_checkbox"):
+                selected_attributes.append(attr)  # Still use original name for data extraction
+        else:
+            if st.checkbox(attr, value=True):
+                selected_attributes.append(attr)
     
     # Custom attribute input
     custom_attr = st.text_input(
@@ -245,15 +255,14 @@ if run_scraper:
             - Total listings found: {scraping_stats['total_listings_found']}
             - Pages scanned: {scraping_stats['total_pages']}
             - Listings processed: {scraping_stats['processed']}
-            - Interesting cars found: {scraping_stats['interesting_cars']}
             """)
             
             # Convert data to dictionary for JSON serialization
             result_data = df.to_dict(orient='records')
             
             # Display results in tabs
-            tab1, tab2, tab3, tab4 = st.tabs(
-                ["Data Table", "JSONderulo", "Analytics", "Download"]
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(
+                ["Data Table", "JSONderulo", "Analytics", "AI Analysis", "Download"]
             )
             
             with tab1:
@@ -470,6 +479,10 @@ if run_scraper:
                     )
                 
             with tab4:
+                # Render the AI Analysis tab from external module
+                render_ai_analysis_tab(df)
+            
+            with tab5:
                 st.download_button(
                     label="Download CSV",
                     data=df.to_csv(index=False).encode('utf-8'),
@@ -492,33 +505,33 @@ if run_scraper:
         except Exception as e:
             st.error(f"An error occurred during scraping: {str(e)}")
             st.exception(e)
+else:
+    # Only show documentation when scraper is not running
+    with st.expander("Documentation", expanded=True):
+        st.markdown("""
+        ## How to use this amazing tool
+        
+        1. Enter a Finn.no search URL with your desired filters
+        2. Select the attributes you want to extract from each car listing
+        3. Choose between scraping a limited number or all matching cars
+        4. Click "Run Scraper" to start the process
+        5. View results as a table or JSON, and download as CSV or JSON
+        
+        ## Tips for Better Results
+        
+        - Apply specific filters on Finn.no before copying the URL
+        - The scraper works best with common car attributes
+        - For custom attributes, use the exact name as it appears on Finn.no
+        - Scraping many listings may take time and might be rate-limited
+        - The tool automatically handles pagination to find all matching cars
+        
+        ## Want to contribute?
 
-# API Documentation
-with st.expander("Documentation", expanded=True):
-    st.markdown("""
-    ## How to use this amazing tool
-    
-    1. Enter a Finn.no search URL with your desired filters
-    2. Select the attributes you want to extract from each car listing
-    3. Choose between scraping a limited number or all matching cars
-    4. Click "Run Scraper" to start the process
-    5. View results as a table or JSON, and download as CSV or JSON
-    
-    ## Tips for Better Results
-    
-    - Apply specific filters on Finn.no before copying the URL
-    - The scraper works best with common car attributes
-    - For custom attributes, use the exact name as it appears on Finn.no
-    - Scraping many listings may take time and might be rate-limited
-    - The tool automatically handles pagination to find all matching cars
-    
-    ## Want to contribute?
+        Reach out to edehvide and discuss your opportunities in this project.
+        Check out his amazing github repo:
+        https://github.com/edevardHvide/edes-bilbot  
 
-    Reach out to edehvide and discuss your opportunities in this project.
-    Check out his amazing github repo:
-    https://github.com/edevardHvide/edes-bilbot  
-
-    """)
+        """)
 
 # Footer
 st.markdown("---")
