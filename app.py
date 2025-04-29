@@ -9,7 +9,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import time
 from matplotlib.ticker import FuncFormatter
-from ai_analyzer import render_ai_analysis_tab
+from ai_analyzer import CarAIAnalyzer
+import openai
+import os
+from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
@@ -20,6 +23,11 @@ DEFAULT_SEARCH_URL = os.getenv(
     'https://www.finn.no/mobility/search/car?registration_class=1'
 )
 DEFAULT_LIMIT = int(os.getenv('DEFAULT_LIMIT', '5'))
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+
+# Set up OpenAI client if API key is available
+if OPENAI_API_KEY:
+    openai.api_key = OPENAI_API_KEY
 
 # Function to format numbers with Norwegian style (spaces as thousands separator)
 def format_with_spaces(num):
@@ -255,6 +263,7 @@ if run_scraper:
             - Total listings found: {scraping_stats['total_listings_found']}
             - Pages scanned: {scraping_stats['total_pages']}
             - Listings processed: {scraping_stats['processed']}
+            - Interesting cars found: {scraping_stats['interesting_cars']}
             """)
             
             # Convert data to dictionary for JSON serialization
@@ -479,8 +488,67 @@ if run_scraper:
                     )
                 
             with tab4:
-                # Render the AI Analysis tab from external module
-                render_ai_analysis_tab(df)
+                # Initialize the AI analyzer
+                analyzer = CarAIAnalyzer()
+                
+                if analyzer.is_available:
+                    st.subheader("AI Analysis of Car Listings")
+                    st.write("Get AI insights about whether each car is a good deal.")
+                    
+                    # Simple dropdown to select a car
+                    if not df.empty:
+                        car_to_analyze = st.selectbox(
+                            "Select a car to analyze:",
+                            options=df['title'].tolist(),
+                            index=0
+                        )
+                        
+                        # Simple analyze button
+                        if st.button("Analyze This Car", type="primary"):
+                            with st.spinner("Analyzing car details..."):
+                                # Get the car data from the dataframe
+                                car_data = df[df['title'] == car_to_analyze].iloc[0].to_dict()
+                                
+                                # Get the analysis
+                                analysis = analyzer.analyze_car(car_data)
+                                
+                                # Display the result
+                                col1, col2 = st.columns([1, 1])
+                                
+                                with col1:
+                                    st.subheader("Car Details")
+                                    # Only show most important details
+                                    important_fields = ['title', 'Totalpris', 'Kilometerstand', 'Modellår']
+                                    for field in important_fields:
+                                        if field in car_data:
+                                            label = "Model" if field == 'title' else field
+                                            st.write(f"**{label}:** {car_data[field]}")
+                                    
+                                    # Add a few more fields if available
+                                    optional_fields = ['Girkasse', 'Drivstoff', 'Motor']
+                                    for field in optional_fields:
+                                        if field in car_data and car_data[field]:
+                                            st.write(f"**{field}:** {car_data[field]}")
+                                    
+                                    if 'url' in car_data:
+                                        st.write(f"[View on Finn.no]({car_data['url']})")
+                                
+                                with col2:
+                                    st.subheader("AI Analysis")
+                                    st.write(analysis)
+                    else:
+                        st.warning("No car data available. Please run the scraper first.")
+                else:
+                    st.warning(
+                        "OpenAI API key not found. Set the OPENAI_API_KEY environment variable to enable AI analysis."
+                    )
+                    st.info(
+                        "Create a .env file in the project root directory and add: OPENAI_API_KEY=your_api_key_here"
+                    )
+                    
+                    # Example .env file contents
+                    st.code("""# .env file example
+OPENAI_API_KEY=your_api_key_here""", language="text")
             
             with tab5:
                 st.download_button(
