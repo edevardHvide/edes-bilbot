@@ -291,12 +291,6 @@ elif run_scraper:
                 current_page.text(
                     f"📄 Page: {scraping_stats['current_page']}/{scraping_stats['total_pages']}"
                 )
-                total_listings_found.text(
-                    f"🚗 Found: {scraping_stats['total_listings_found']} cars"
-                )
-                processed_count.text(
-                    f"✅ Processed: {scraping_stats['processed']} cars"
-                )
                 
                 # Show easter egg comment occasionally (about 20% of listings)
                 if scraping_stats.get("new_listing") and random.random() < 0.2:
@@ -318,7 +312,9 @@ elif run_scraper:
                 
                 # Show listing title in the info area
                 if listing_data and 'title' in listing_data:
-                    listing_info.text(f"🔎 Processing: {listing_data['title']}")
+                    # Format the page number for display
+                    page_info = f"Page {listing_data.get('page', 1)}" if 'page' in listing_data else ""
+                    listing_info.text(f"🔎 Processing: {listing_data['title']} - {page_info} - URL: {listing_data['url']}")
             
             # Initialize the scraper
             status_text.info("🚀 Initializing scraper...")
@@ -413,10 +409,7 @@ elif run_scraper:
                             # Try different approaches to convert the data to numeric
                             # First attempt - basic conversion with debug info
                             try:
-                                # Show original data format for debugging
-                                st.write("Sample data before conversion:")
-                                st.write(df[["Totalpris", "Kilometerstand"]].head())
-                                
+                           
                                 # Clean data - remove non-numeric characters
                                 df['Totalpris_clean'] = df['Totalpris'].astype(str).str.replace(r'[^\d]', '', regex=True)
                                 df['Kilometerstand_clean'] = df['Kilometerstand'].astype(str).str.replace(r'[^\d]', '', regex=True)
@@ -425,11 +418,7 @@ elif run_scraper:
                                 df['Totalpris_num'] = pd.to_numeric(df['Totalpris_clean'], errors='coerce')
                                 df['Kilometerstand_num'] = pd.to_numeric(df['Kilometerstand_clean'], errors='coerce')
                                 
-                                # Show conversion results for debugging
-                                st.write("Conversion results:")
-                                st.write(f"Valid price values: {df['Totalpris_num'].notna().sum()} of {len(df)}")
-                                st.write(f"Valid mileage values: {df['Kilometerstand_num'].notna().sum()} of {len(df)}")
-                                
+                               
                                 # Drop rows with NaN values
                                 plot_df = df.dropna(subset=['Totalpris_num', 'Kilometerstand_num'])
                                 st.write(f"Rows after dropping NaN: {len(plot_df)}")

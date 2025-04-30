@@ -271,10 +271,10 @@ class FinnCarScraper:
         """Extract data from an individual listing page."""
         try:
             if self.debug_mode:
-                logger.debug(f"Navigating to listing: {listing_url}")
+                logger.debug(f"Extracting data from: {listing_url}")
             else:
                 logger.info("Scraping listing...")
-                
+            
             self.driver.get(listing_url)
             time.sleep(self.request_delay)  # Use configured delay
             
@@ -301,7 +301,7 @@ class FinnCarScraper:
             if self.debug_mode:
                 logger.debug("Parsing page with BeautifulSoup")
             soup = BeautifulSoup(self.driver.page_source, 'html.parser')
-            listing_data = {}
+            listing_data = {'page': 1}  # Initialize with page 1 by default
             
             # Extract title - more generic approach
             if self.debug_mode:
@@ -468,10 +468,10 @@ class FinnCarScraper:
 
     def scrape_listings(self, limit=5):
         """
-        Scrape car listings from the search results.
+        Scrape car listings from the search results across multiple pages.
         
         Args:
-            limit (int): Maximum number of listings to scrape (for testing)
+            limit (int): Maximum number of listings to scrape
         """
         try:
             # Check if a page parameter already exists in the URL
@@ -487,27 +487,24 @@ class FinnCarScraper:
                 self.base_url = base_url_without_page
                 logger.info(f"Removed existing page parameter. Base URL: {self.base_url}")
             
-            # Get initial page to find pagination info
-            logger.info("Checking total number of pages on Finn.no")
-            
             # Always start with page 1 to determine total pages
             if '?' in self.base_url:
                 page1_url = f"{self.base_url}&page=1"
             else:
                 page1_url = f"{self.base_url}?page=1"
                 
-            logger.debug(f"Navigating to: {page1_url}")
+            logger.info(f"Starting with URL: {page1_url}")
             self.driver.get(page1_url)
             time.sleep(self.request_delay)
             
-            # Look for pagination info on the initial page
+            # Get total number of pages
             total_pages = self.get_pagination_info()
             logger.info(f"Found {total_pages} pages to scrape")
             
-            # Each page typically has 51 listings
-            listings_per_page = 51
+            # Each page typically has up to 50 listings
+            listings_per_page = 50
             
-            # Calculate actual pages to scrape based on limit
+            # Calculate how many pages we need to visit to get the requested number of listings
             if limit < float('inf'):
                 pages_to_scrape = min(total_pages, (limit + listings_per_page - 1) // listings_per_page)
                 logger.info(f"Will scrape up to {limit} listings (about {pages_to_scrape} pages)")
@@ -515,14 +512,18 @@ class FinnCarScraper:
                 pages_to_scrape = total_pages
                 logger.info(f"Will scrape all {total_pages} pages")
             
-            listings_processed = 0
-            total_listings_found = 0
-            all_listing_urls = []
+            # Make sure we scrape at least 2 pages if limit requires it and total_pages > 1
+            if limit > listings_per_page and total_pages > 1 and pages_to_scrape < 2:
+                pages_to_scrape = 2
+                logger.info(f"Adjusted to scrape at least {pages_to_scrape} pages for the requested limit")
             
-            # Iterate through all necessary pages to find listing URLs
+            listings_processed = 0
+            
+            # Iterate through pages
             for page in range(1, pages_to_scrape + 1):
-                if limit < float('inf') and total_listings_found >= limit:
-                    logger.info("Found enough listings. Stopping page scan.")
+                # Exit if we've reached the limit
+                if listings_processed >= limit:
+                    logger.info(f"Reached limit of {limit} listings. Stopping.")
                     break
                 
                 # Construct URL with page parameter
@@ -531,20 +532,46 @@ class FinnCarScraper:
                 else:
                     page_url = f"{self.base_url}?page={page}"
                     
-                logger.info(f"Scanning page {page}/{pages_to_scrape}")
-                logger.debug(f"Navigating to: {page_url}")
+                logger.info(f"Navigating to page {page}/{pages_to_scrape} at URL: {page_url}")
                 
-                # Navigate to the page
-                self.driver.get(page_url)
-                time.sleep(self.request_delay)  # Use configured delay
+                # Try loading the page with retries
+                max_attempts = 3
+                for attempt in range(1, max_attempts + 1):
+                    try:
+                        # Navigate to the page
+                        self.driver.get(page_url)
+                        time.sleep(self.request_delay)
+                        
+                        # Verify we loaded a results page by checking for listings
+                        test_elements = self.driver.find_elements(
+                            By.CSS_SELECTOR,
+                            "a[data-testid='car-ad-link'], article.sf-search-ad, div.ads__unit"
+                        )
+                        
+                        if test_elements:
+                            logger.debug(f"Successfully loaded page {page} (attempt {attempt})")
+                            break
+                        else:
+                            logger.warning(f"Page {page} loaded but no listings found (attempt {attempt})")
+                            if attempt < max_attempts:
+                                logger.info(f"Retrying page {page} in 2 seconds...")
+                                time.sleep(2)
+                    except Exception as e:
+                        logger.warning(f"Error loading page {page} (attempt {attempt}): {e}")
+                        if attempt < max_attempts:
+                            logger.info(f"Retrying page {page} in 2 seconds...")
+                            time.sleep(2)
+                        else:
+                            logger.error(f"Failed to load page {page} after {max_attempts} attempts")
+                            # Skip to next page if this one fails repeatedly
+                            continue
                 
-                # Verify we're on the right page (debugging)
-                current_url = self.driver.current_url
-                logger.debug(f"Current URL: {current_url}")
+                # Current page URL for debugging
+                logger.debug(f"Current URL after navigation: {self.driver.current_url}")
                 
                 # Report progress if callback is provided
                 if self.progress_callback:
-                    progress = min(page / pages_to_scrape * 0.5, 0.5)  # First half is for scanning
+                    progress = min(page / pages_to_scrape * 0.5, 0.5)
                     message = f"Scanning page {page}/{pages_to_scrape}"
                     self.progress_callback(progress, 1.0, message)
                 
@@ -552,65 +579,73 @@ class FinnCarScraper:
                 if self.debug_mode:
                     with open(f"page_{page}_source.html", "w", encoding="utf-8") as f:
                         f.write(self.driver.page_source)
-                    logger.debug("Saved page source to file")
+                    logger.debug(f"Saved page {page} source to file")
                 
-                # Find all listing links
-                if self.debug_mode:
-                    logger.debug("Looking for car ad links...")
-                
-                # Use a more general approach to find listing links
+                # Find all listing links on this page
                 listing_urls = self.extract_listing_links_from_page()
-                
-                # Add listings to our collection
-                all_listing_urls.extend(listing_urls)
-                total_listings_found += len(listing_urls)
-                
                 logger.info(f"Found {len(listing_urls)} listing URLs on page {page}")
-                logger.info(f"Total listings found so far: {len(all_listing_urls)}")
+                
+                # Check if we found any listings on this page
+                if not listing_urls:
+                    logger.warning(f"No listings found on page {page}, moving to next page")
+                    continue
                 
                 # Update listing statistics callback if provided
                 if self.listing_callback:
-                    self.listing_callback(page, pages_to_scrape, total_listings_found)
-            
-            # Now process the individual listings up to the limit
-            logger.info("Processing individual listings...")
-            
-            # Limit the number of listings to process if a limit is set
-            if limit < float('inf'):
-                listings_to_process = all_listing_urls[:limit]
-            else:
-                listings_to_process = all_listing_urls
+                    self.listing_callback(page, pages_to_scrape, len(listing_urls))
                 
-            logger.info(f"Will process {len(listings_to_process)} individual listings")
-            
-            # Process each listing
-            for i, url in enumerate(listings_to_process):
-                if self.debug_mode:
-                    logger.debug(f"Scraping listing {i+1}/{len(listings_to_process)}")
+                # Process listings from this page
+                listings_to_process = listing_urls
                 
-                # Update progress
-                if self.progress_callback:
-                    base_progress = 0.5  # First half was for page scanning
-                    listing_progress = (i / len(listings_to_process)) * 0.5
-                    total_progress = base_progress + listing_progress
-                    message = f"Scraping listing {i+1}/{len(listings_to_process)}"
-                    self.progress_callback(total_progress, 1.0, message)
+                # Limit the number of listings to process if needed
+                remaining = limit - listings_processed
+                if remaining < len(listings_to_process):
+                    listings_to_process = listings_to_process[:remaining]
+                    
+                logger.info(f"Processing {len(listings_to_process)} listings from page {page}")
                 
-                listing_data = self.extract_listing_data(url)
-                if listing_data:
-                    listing_data['url'] = url
-                    self.data.append(listing_data)
-                    listings_processed += 1
-                    logger.info(f"Processed {listings_processed}/{len(listings_to_process)}")
-                else:
+                # Process each listing from this page
+                for i, url in enumerate(listings_to_process):
                     if self.debug_mode:
-                        logger.warning("Failed to extract data from listing")
+                        logger.debug(f"Scraping listing {i+1}/{len(listings_to_process)} from page {page}")
+                    
+                    # Update progress
+                    if self.progress_callback:
+                        base_progress = 0.5  # First half was for page scanning
+                        listings_progress = ((page - 1) * listings_per_page + i) / (pages_to_scrape * listings_per_page) * 0.5
+                        total_progress = base_progress + listings_progress
+                        message = f"Scraping listing {i+1}/{len(listings_to_process)} from page {page}"
+                        self.progress_callback(total_progress, 1.0, message)
+                    
+                    # Extract data from this listing
+                    listing_data = self.extract_listing_data(url)
+                    if listing_data:
+                        listing_data['url'] = url
+                        # Make sure the page number is set (will override the default)
+                        listing_data['page'] = page
+                        self.data.append(listing_data)
+                        listings_processed += 1
+                        logger.info(f"Processed {listings_processed}/{limit} total listings")
+                        
+                        # Call callback with the listing data if provided
+                        if self.processed_callback:
+                            self.processed_callback(listing_data)
+                    else:
+                        if self.debug_mode:
+                            logger.warning(f"Failed to extract data from listing {url}")
+                    
+                    # Optional small delay between listings
+                    time.sleep(max(0.5, self.request_delay / 3))
                 
-                # Optional small delay between listings to be gentle to the server
-                time.sleep(max(0.5, self.request_delay / 3))
+                logger.info(f"Completed page {page}/{pages_to_scrape}, {listings_processed}/{limit} listings processed")
                 
-            logger.info("All listings processed")
-                
+                # Add a small delay between pages
+                if page < pages_to_scrape:
+                    logger.debug(f"Waiting {self.request_delay} seconds before loading next page...")
+                    time.sleep(self.request_delay)
+            
+            logger.info(f"All listing processing completed. Collected {listings_processed} listings in total.")
+            
         except Exception as e:
             logger.error(f"Error during scraping: {e}")
             if self.debug_mode:
@@ -629,119 +664,240 @@ class FinnCarScraper:
             # Look for pagination elements
             logger.debug("Looking for pagination elements...")
             
+            # Try to find the pagination container first
+            pagination_container = self.driver.find_elements(
+                By.CSS_SELECTOR, 
+                "nav[aria-label='Pagination'], .pagination, .pagination-container"
+            )
+            
+            if pagination_container:
+                logger.debug("Found pagination container")
+            
             # Method 1: Look for pagination buttons (most common)
             pagination_elements = self.driver.find_elements(
                 By.CSS_SELECTOR, 
-                "button[aria-label*='Side']"
+                "button[aria-label*='Side'], [data-testid*='pagination'], .pagination button, .sf-pagination-item, a[href*='page=']"
             )
             
             if pagination_elements:
+                logger.debug(f"Found {len(pagination_elements)} pagination elements")
+                
                 # Get the last button's aria-label (e.g., "Side 5 av 10")
                 last_page_button = pagination_elements[-1]
                 aria_label = last_page_button.get_attribute('aria-label')
+                logger.debug(f"Last pagination element aria-label: {aria_label}")
                 
                 if aria_label and " av " in aria_label:
                     # Extract the number after "av"
                     total_pages = int(aria_label.split(" av ")[-1])
                     logger.info(f"Total pages from pagination: {total_pages}")
                     return total_pages
+                
+                # Check for text content of the last page button
+                last_button_text = last_page_button.text.strip()
+                logger.debug(f"Last pagination element text: {last_button_text}")
+                
+                if last_button_text and last_button_text.isdigit():
+                    total_pages = int(last_button_text)
+                    logger.info(f"Total pages from last pagination button: {total_pages}")
+                    return total_pages
             
-            # Method 2: Try to find any text indicating total number of hits
-            total_hits_element = self.driver.find_element(
+            # Method 2: Look for "Next" button or link
+            next_buttons = self.driver.find_elements(
                 By.CSS_SELECTOR, 
-                ".u-strong"  # Strong elements often contain counts
+                "[aria-label*='Neste'], [aria-label*='Next'], a[href*='page='][rel='next'], .next, .pagination-next"
             )
             
-            if total_hits_element:
-                hits_text = total_hits_element.text
+            if next_buttons:
+                # If there's a next button, there are at least 2 pages
+                logger.info("Found 'Next' button - at least 2 pages")
+                return 2
+            
+            # Method 3: Try to find any text indicating total number of hits
+            total_hits_elements = self.driver.find_elements(
+                By.CSS_SELECTOR, 
+                ".u-strong, .total-count, .search-results-count, .search-hits"
+            )
+            
+            for element in total_hits_elements:
+                hits_text = element.text
+                logger.debug(f"Found potential hit count: {hits_text}")
+                
                 # Try to extract a number
                 import re
                 hits_match = re.search(r'(\d+)', hits_text)
                 if hits_match:
                     total_hits = int(hits_match.group(1))
-                    # Calculate pages (51 results per page)
-                    estimated_pages = (total_hits + 50) // 51
-                    logger.info(f"Estimated {estimated_pages} pages from {total_hits} hits")
-                    return max(1, estimated_pages)
+                    
+                    # If the number seems to be a count of total listings
+                    if total_hits > 20:
+                        # Calculate pages (50 results per page)
+                        estimated_pages = (total_hits + 49) // 50
+                        logger.info(f"Estimated {estimated_pages} pages from {total_hits} hits")
+                        return max(1, estimated_pages)
             
-            # Method 3: Check if there's a "Next page" button
-            next_button = self.driver.find_element(
-                By.CSS_SELECTOR, 
-                "[aria-label*='Neste side']"
-            )
+            # Method 4: Check the URL if it already indicates we're on page 1
+            current_url = self.driver.current_url
+            logger.debug(f"Current URL: {current_url}")
             
-            if next_button:
-                logger.info("Found 'Next page' button - at least 2 pages")
-                return 2  # At least 2 pages
+            if "page=1" in current_url:
+                # Try to find links to page 2
+                page2_links = self.driver.find_elements(
+                    By.CSS_SELECTOR,
+                    f"a[href*='page=2'], button[aria-label*='Side 2']"
+                )
                 
+                if page2_links:
+                    logger.info("Found link to page 2 - at least 2 pages")
+                    return 2
+            
+            # Method 5: Try to count the number of car listings to see if we need pagination
+            listing_count = len(self.driver.find_elements(
+                By.CSS_SELECTOR,
+                "a[data-testid='car-ad-link'], article.sf-search-ad"
+            ))
+            
+            logger.debug(f"Found {listing_count} listings on current page")
+            
+            if listing_count >= 45:
+                # If we have many listings on one page, assume there's at least one more page
+                logger.info(f"Found {listing_count} listings on page, assuming at least 2 pages")
+                return 2
+            
             # Default: Assume at least 1 page
-            logger.info("No pagination found - assuming 1 page")
+            logger.info("No pagination indicators found - assuming 1 page")
             return 1
             
         except Exception as e:
             logger.warning(f"Error getting pagination info: {e}")
-            return 1  # Default to 1 page on error
+            if self.debug_mode:
+                logger.debug("Exception details:", exc_info=True)
+            # Default to 2 pages to be safe
+            logger.info("Assuming at least 2 pages due to error")
+            return 2
             
     def extract_listing_links_from_page(self):
         """Extract all listing links from the current page using multiple strategies."""
         listing_urls = []
         
         try:
+            logger.debug("Looking for car listing links on this page...")
+            
             # Strategy 1: Look for standard car ad links
+            logger.debug("Trying data-testid='car-ad-link' selector...")
             listing_elements = self.driver.find_elements(
                 By.CSS_SELECTOR,
                 "a[data-testid='car-ad-link']"
             )
             
             if listing_elements:
+                logger.debug(f"Found {len(listing_elements)} elements with data-testid='car-ad-link'")
                 for elem in listing_elements:
                     href = elem.get_attribute('href')
                     if href and 'finn.no' in href:
                         listing_urls.append(href)
                 
-                logger.debug(f"Found {len(listing_urls)} links with data-testid='car-ad-link'")
-                
-            # Strategy 2: If no elements found with specific selector, try article links
-            if not listing_elements:
-                logger.debug("Trying alternative selectors for listings...")
+                logger.debug(f"Added {len(listing_urls)} links from car-ad-link selector")
+            else:
+                logger.debug("No listing elements found with data-testid='car-ad-link'")
+            
+            # Strategy 2: If no elements found with specific selector or too few links, try article links
+            if len(listing_urls) < 20:
+                logger.debug("Trying article.sf-search-ad selector...")
                 
                 # Try links inside articles
                 article_links = self.driver.find_elements(
                     By.CSS_SELECTOR,
-                    "article.sf-search-ad a"
+                    "article.sf-search-ad a, div.ads__unit a"
                 )
                 
+                init_count = len(listing_urls)
                 for elem in article_links:
                     href = elem.get_attribute('href')
                     if href and 'finn.no' in href and href not in listing_urls:
-                        listing_urls.append(href)
+                        if '/car/' in href or '/car?' in href or 'mobility' in href:
+                            listing_urls.append(href)
                 
-                logger.debug(f"Found {len(listing_urls)} links from articles")
+                logger.debug(f"Added {len(listing_urls) - init_count} links from article selector")
             
-            # Strategy 3: Look for any link that seems to be a car listing
-            if len(listing_urls) < 10:  # If we still don't have many links
+            # Strategy 3: Check for other common listing containers 
+            if len(listing_urls) < 20:
+                logger.debug("Trying other listing container selectors...")
+                
+                container_selectors = [
+                    ".search-results-list a", 
+                    ".ads a", 
+                    ".finn-listing a", 
+                    ".listing a",
+                    "[data-automation-id='searchResult'] a",
+                    "[data-testid='searchResults'] a"
+                ]
+                
+                init_count = len(listing_urls)
+                for selector in container_selectors:
+                    container_links = self.driver.find_elements(
+                        By.CSS_SELECTOR, selector
+                    )
+                    
+                    for elem in container_links:
+                        href = elem.get_attribute('href')
+                        if href and 'finn.no' in href and href not in listing_urls:
+                            if '/car/' in href or '/car?' in href or 'mobility' in href:
+                                listing_urls.append(href)
+                
+                logger.debug(f"Added {len(listing_urls) - init_count} links from container selectors")
+            
+            # Strategy 4: Look for any link that seems to be a car listing
+            if len(listing_urls) < 20:
                 logger.debug("Looking for any car listing links...")
                 
                 all_links = self.driver.find_elements(By.TAG_NAME, "a")
+                logger.debug(f"Checking {len(all_links)} total links on the page")
+                
+                init_count = len(listing_urls)
                 for elem in all_links:
                     href = elem.get_attribute('href')
-                    if href and 'finn.no' in href and '/car/' in href and href not in listing_urls:
-                        listing_urls.append(href)
+                    if href and 'finn.no' in href and href not in listing_urls:
+                        # Check if the link looks like a car listing
+                        if ('/car/' in href or 
+                            '/car?' in href or 
+                            'mobility' in href or 
+                            'bap/forsale' in href):
+                            listing_urls.append(href)
                 
-                logger.debug(f"Found {len(listing_urls)} total car listing links")
+                logger.debug(f"Added {len(listing_urls) - init_count} links from generic link search")
             
             # Filter to only include actual car listings
-            car_listings = [url for url in listing_urls if '/car/' in url]
+            logger.debug(f"Found {len(listing_urls)} total potential car listing links")
+            
+            # Use a more precise regex to identify car listing URLs
+            car_listing_pattern = re.compile(r'finn\.no/.*(?:car/|mobility/|bap/forsale)')
+            car_listings = [
+                url for url in listing_urls 
+                if car_listing_pattern.search(url)
+            ]
+            
+            logger.debug(f"After filtering, found {len(car_listings)} valid car listing links")
             
             # If filtering removed too many, fall back to original list
-            if len(car_listings) < 10 and len(listing_urls) >= 10:
+            if len(car_listings) < 10 and len(listing_urls) >= 20:
                 logger.warning("Too many links filtered out, using original list")
                 return listing_urls
             
-            return car_listings
+            if not car_listings and not listing_urls:
+                # Last resort: save the page for debugging
+                if self.debug_mode:
+                    with open("failed_page_source.html", "w", encoding="utf-8") as f:
+                        f.write(self.driver.page_source)
+                    logger.debug("No listings found - saved page source to failed_page_source.html")
+                logger.warning("Could not find any car listing links on this page!")
+            
+            return car_listings if car_listings else listing_urls
             
         except Exception as e:
             logger.error(f"Error extracting listing links: {e}")
+            if self.debug_mode:
+                logger.debug("Exception details:", exc_info=True)
             return []
 
     def get_total_pages_from_url(self, url):
@@ -869,7 +1025,7 @@ def main():
         "Modellår,Kilometerstand,'1. gang registrert',Totalpris"
     ).split(',')
     
-    limit = int(os.getenv('DEFAULT_LIMIT', '5'))
+    limit = int(os.getenv('DEFAULT_LIMIT', '60'))  # Default limit changed to 60
     
     logger.info("Starting the FinnCarScraper")
     scraper = FinnCarScraper(url, attributes_to_extract)
