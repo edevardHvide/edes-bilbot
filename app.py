@@ -13,6 +13,10 @@ from ai_analyzer import CarAIAnalyzer
 import openai
 import os
 from dotenv import load_dotenv
+import numpy as np
+from scipy import stats
+from page_counter import get_total_pages
+import logging
 
 # Load environment variables
 load_dotenv()
@@ -140,9 +144,94 @@ with st.sidebar:
     
     # Run button
     run_scraper = st.button("Run Scraper", type="primary")
+    
+    # Add option to load test data
+    col1, col2 = st.columns(2)
+    with col1:
+        load_test_data = st.button("🧪 Load Test Data", help="Load sample data for testing without running the scraper")
+    with col2:
+        save_as_test = st.checkbox("📥 Save results as test data", value=False, 
+                                help="Save the scraped results as test data for future use")
+
+# Function to load test data
+def load_sample_data():
+    """Load saved test data if available"""
+    test_data_path = "test_data.pkl"
+    if os.path.exists(test_data_path):
+        try:
+            return pd.read_pickle(test_data_path)
+        except Exception as e:
+            st.error(f"Error loading test data: {str(e)}")
+    return None
+
+# Function to save test data
+def save_sample_data(df):
+    """Save dataframe as test data"""
+    test_data_path = "test_data.pkl"
+    try:
+        df.to_pickle(test_data_path)
+        return True
+    except Exception as e:
+        st.error(f"Error saving test data: {str(e)}")
+        return False
 
 # Main content area
-if run_scraper:
+if load_test_data:
+    # Load saved test data instead of running the scraper
+    df = load_sample_data()
+    
+    if df is not None and not df.empty:
+        st.success("✅ Test data loaded successfully!")
+        
+        # Display results in tabs
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(
+            ["Data Table", "JSONderulo", "Analytics", "AI Analysis", "Download"]
+        )
+        
+        # Convert data to dictionary for JSON serialization
+        result_data = df.to_dict(orient='records')
+        
+        with tab1:
+            st.dataframe(df, use_container_width=True)
+            
+        with tab2:
+            st.json(result_data)
+            
+        with tab3:
+            # Analytics tab content
+            if "Totalpris" in df.columns and "Kilometerstand" in df.columns:
+                # Existing analytics code
+                st.subheader("Price vs. Mileage Analysis")
+                # ... rest of the analytics code remains the same
+                
+        with tab4:
+            # AI Analysis tab content
+            analyzer = CarAIAnalyzer()
+            # ... rest of the AI Analysis code remains the same
+            
+        with tab5:
+            # Download tab content
+            st.download_button(
+                label="Download CSV",
+                data=df.to_csv(index=False).encode('utf-8'),
+                file_name="finn_car_data.csv",
+                mime="text/csv"
+            )
+            
+            json_str = json.dumps(
+                result_data, 
+                ensure_ascii=False, 
+                indent=2
+            )
+            st.download_button(
+                label="Download JSON",
+                data=json_str,
+                file_name="finn_car_data.json",
+                mime="application/json"
+            )
+    else:
+        st.error("❌ No test data found. Please run the scraper at least once and save the results.")
+elif run_scraper:
     if not base_url:
         st.error("Please enter a valid Finn.no URL")
     elif not selected_attributes:
@@ -245,12 +334,40 @@ if run_scraper:
             status_text.info(
                 f"🚀 Starting to scrape {'all' if limit == float('inf') else limit} cars..."
             )
+            
+            # Check number of pages before scraping (informational only)
+            try:
+                # Set a short delay to avoid rate limiting
+                page_delay = 0.5
+                
+                # Show a message about checking pages
+                pages_info = st.empty()
+                pages_info.info("📄 Checking number of pages in search results...")
+                
+                # Get the number of pages without blocking the interface too long
+                num_pages = get_total_pages(base_url, delay=page_delay, max_pages=20)
+                
+                # Update the status with page information
+                if num_pages > 0:
+                    pages_info.info(f"📄 Found {num_pages} pages of search results (approximately {num_pages * 25} listings)")
+                else:
+                    pages_info.warning("⚠️ Could not determine the number of pages in search results")
+            except Exception as e:
+                # Just log the error but continue with scraping
+                logger.warning(f"Could not determine number of pages: {str(e)}")
+            
+            # Start the actual scraping
             scraper.scrape_listings(limit=limit)
             
             # Save as temporary CSV
             temp_dir = tempfile.gettempdir()
             temp_csv = os.path.join(temp_dir, "finn_car_data.csv")
             df = scraper.save_to_csv(temp_csv)
+            
+            # Save as test data if requested
+            if save_as_test:
+                if save_sample_data(df):
+                    st.success("✅ Results saved as test data for future use!")
             
             # Display results
             status_text.success("✅ Scraping completed!")
@@ -263,7 +380,6 @@ if run_scraper:
             - Total listings found: {scraping_stats['total_listings_found']}
             - Pages scanned: {scraping_stats['total_pages']}
             - Listings processed: {scraping_stats['processed']}
-            - Interesting cars found: {scraping_stats['interesting_cars']}
             """)
             
             # Convert data to dictionary for JSON serialization
@@ -331,6 +447,33 @@ if run_scraper:
                                         s=80,
                                         color='royalblue'
                                     )
+                                    
+                                    # Add a linear regression line
+                                    slope, intercept, r_value, p_value, std_err = stats.linregress(
+                                        plot_df['Kilometerstand_num'], 
+                                        plot_df['Totalpris_num']
+                                    )
+                                    
+                                    # Create the regression line
+                                    x_values = plot_df['Kilometerstand_num']
+                                    x_range = np.linspace(x_values.min(), x_values.max(), 100)
+                                    y_regression = intercept + slope * x_range
+                                    
+                                    # Plot the regression line
+                                    ax.plot(
+                                        x_range, 
+                                        y_regression, 
+                                        color='red', 
+                                        linestyle='--', 
+                                        linewidth=2,
+                                        label=f'y = {intercept:.0f} + {slope:.2f}x (r² = {r_value**2:.2f})'
+                                    )
+                                    
+                                    # Calculate the average cost per kilometer
+                                    avg_cost_per_km = -slope  # Negative because the slope is typically negative
+                                    
+                                    # Add a legend
+                                    ax.legend(loc='upper right')
                                     
                                     # Add row indices as annotations for hovering
                                     # Reset index to get sequential numbers if there were any dropped rows
