@@ -7,4 +7,5 @@ python-dotenv==1.0.0
 matplotlib==3.8.2
 numpy==1.26.2
 scipy==1.11.4
-openai==1.13.3 
+openai==1.13.3
+requests==2.31.0 

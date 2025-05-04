@@ -466,12 +466,13 @@ class FinnCarScraper:
                 logger.debug("Exception details:", exc_info=True)
             return None
 
-    def scrape_listings(self, limit=5):
+    def scrape_listings(self, limit=5, page_offset=0):
         """
         Scrape car listings from the search results across multiple pages.
         
         Args:
             limit (int): Maximum number of listings to scrape
+            page_offset (int): Page number to start from (0-based index, add 1 for actual page)
         """
         try:
             # Check if a page parameter already exists in the URL
@@ -487,7 +488,7 @@ class FinnCarScraper:
                 self.base_url = base_url_without_page
                 logger.info(f"Removed existing page parameter. Base URL: {self.base_url}")
             
-            # Always start with page 1 to determine total pages
+            # Always start with checking page 1 for pagination info if page_offset is 0
             if '?' in self.base_url:
                 page1_url = f"{self.base_url}&page=1"
             else:
@@ -517,10 +518,17 @@ class FinnCarScraper:
                 pages_to_scrape = 2
                 logger.info(f"Adjusted to scrape at least {pages_to_scrape} pages for the requested limit")
             
+            # Apply page offset - adjust page range
+            start_page = page_offset + 1  # Convert 0-based to 1-based for actual URLs
+            end_page = min(total_pages, start_page + pages_to_scrape - 1)
+            
+            logger.info(f"Starting from page {start_page} (offset {page_offset})")
+            logger.info(f"Will scrape pages {start_page} to {end_page}")
+            
             listings_processed = 0
             
             # Iterate through pages
-            for page in range(1, pages_to_scrape + 1):
+            for page in range(start_page, end_page + 1):
                 # Exit if we've reached the limit
                 if listings_processed >= limit:
                     logger.info(f"Reached limit of {limit} listings. Stopping.")
@@ -532,7 +540,7 @@ class FinnCarScraper:
                 else:
                     page_url = f"{self.base_url}?page={page}"
                     
-                logger.info(f"Navigating to page {page}/{pages_to_scrape} at URL: {page_url}")
+                logger.info(f"Navigating to page {page}/{end_page} at URL: {page_url}")
                 
                 # Try loading the page with retries
                 max_attempts = 3
